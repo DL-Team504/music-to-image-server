@@ -1,23 +1,34 @@
-from fastapi import FastAPI, File, Form, UploadFile
-from pydantic import BaseModel, ConfigDict
+from fastapi import FastAPI, File, Form, UploadFile, Depends
+from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
-from typing import BinaryIO, TypedDict
+from typing import TypedDict
 import torch
 from transformers import WhisperProcessor, WhisperForConditionalGeneration
 import librosa
+import numpy as np
+from sqlalchemy.orm import Session
+from datetime import datetime
+
+from . import crud, models, schemas
+from .database import SessionLocal, engine
 
 
 from transformers.modeling_utils import PreTrainedModel
 
 
-def to_camel_case(string: str) -> str:
-    res = "".join(word.capitalize() for word in string.split("_"))
-    return res[0].lower() + res[1:]
+models.Base.metadata.create_all(bind=engine)
 
 
-def speech_to_text(audio: BinaryIO) -> str:
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+def speech_to_text(audio: np.ndarray, sr: int) -> str:
     SAMPLING_RATE = 16000
-    audio, sr = librosa.load(audio)
 
     audio_resample = librosa.resample(audio, orig_sr=sr, target_sr=SAMPLING_RATE)
     input_features = ml_models["stt_processor"](
@@ -42,14 +53,6 @@ class MlModels(TypedDict):
     stt_processor: WhisperProcessor
 
 
-class GalleryImage(BaseModel):
-    img_url: str
-    title: str
-    creation_date: str
-
-    model_config = ConfigDict(alias_generator=to_camel_case, populate_by_name=True)
-
-
 ml_models: MlModels = {}
 
 
@@ -72,8 +75,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-
-# mount director where generated images are stored
+app.mount("/images", StaticFiles(directory="images"), name="images")
 
 
 @app.post("/generate-image")
@@ -81,20 +83,38 @@ def generate_image(
     start: int = Form(...),
     end: int = Form(...),
     image_style: str | None = Form(None),
-    audio: UploadFile = File(...),
+    upload_file: UploadFile = File(...),
 ) -> str:
-    # load audio file
-    # if needed clamp focus_area to audio length
     # splice audio according to focus_area
     # pass to audio to image function
     # save the image received from the function
     # make a db record of {image_url, title(audio file name), creation_date}
     # return the url location of the image
 
-    return speech_to_text(audio.file)
+    if start < 0:
+        start = 0
+
+    end = min(start + 30, end)
+
+    duration = end - start
+
+    audio, sr = librosa.load(upload_file.file, offset=start, duration=duration)
+
+    audio_text = speech_to_text(audio, sr)
+
+    # image = generate_image(audio_text, audio)
+    # path = save_image(image)
+    # title = upload_file.filename
+    # creation_date = datetime.today().strftime('%B %d, %Y')
+    # generated_image_create = schemas.GalleryImageCreate(path=path, title=title, creation_date=creation_date)
+    # crud.create_generated_image(db, generated_image_create)
+    # return path
+
+    return speech_to_text(audio, sr)
 
 
 @app.get("/gallery/images")
-def get_gallery_images() -> list[GalleryImage]:
-    # return a list of the last ~20 records in the db
-    return
+def get_gallery_images(db: Session = Depends(get_db)) -> list[schemas.GalleryImage]:
+    images = crud.get_generated_images(db)
+
+    return images
