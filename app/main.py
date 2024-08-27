@@ -1,19 +1,35 @@
+from diffusers.pipelines import stable_diffusion
 from fastapi import FastAPI, File, Form, UploadFile, Depends
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
-from typing import TypedDict
+from typing import TypedDict, Any
 import torch
-from transformers import WhisperProcessor, WhisperForConditionalGeneration
+from transformers import (
+    WhisperProcessor,
+    WhisperForConditionalGeneration,
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    PreTrainedModel,
+    PreTrainedTokenizer,
+)
+from diffusers import StableDiffusionPipeline
+
+# from transformers import , AutoTokenizer
 import librosa
 import numpy as np
 from sqlalchemy.orm import Session
 from datetime import datetime
 
+# import pickle
+import dill
+
+
 from . import crud, models, schemas
 from .database import SessionLocal, engine
+from .utils import createResponse, promptData
+from .model import AudioCaptioningModel, Vocabulary, infer
 
-
-from transformers.modeling_utils import PreTrainedModel
+# from .__main__ import Vocabulary
 
 
 models.Base.metadata.create_all(bind=engine)
@@ -51,6 +67,12 @@ def speech_to_text(audio: np.ndarray, sr: int) -> str:
 class MlModels(TypedDict):
     stt: PreTrainedModel
     stt_processor: WhisperProcessor
+    llm: PreTrainedModel
+    llm_tokenizer: PreTrainedTokenizer
+    stable_diffusion: StableDiffusionPipeline
+    music_captioning: AudioCaptioningModel
+    music_captioning_vocab: Vocabulary
+    # music_captioning_vocab: Any
 
 
 ml_models: MlModels = {}
@@ -58,6 +80,9 @@ ml_models: MlModels = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    with open("app/vocab-dill.pkl", "rb") as f:
+        ml_models["music_captioning_vocab"] = dill.load(f)
+
     has_cuda = torch.cuda.is_available()
     stt_model_path = "ivrit-ai/whisper-large-v2-tuned"
 
@@ -67,6 +92,32 @@ async def lifespan(app: FastAPI):
 
     ml_models["stt"] = stt_model
     ml_models["stt_processor"] = WhisperProcessor.from_pretrained(stt_model_path)
+    ml_models["llm"] = AutoModelForCausalLM.from_pretrained(
+        "microsoft/Phi-3-mini-128k-instruct",
+        device_map="cuda",
+        torch_dtype="auto",
+        trust_remote_code=True,
+    )
+    ml_models["llm_tokenizer"] = AutoTokenizer.from_pretrained(
+        "microsoft/Phi-3-mini-128k-instruct"
+    )
+    ml_models["stable_diffusion"] = StableDiffusionPipeline.from_pretrained(
+        "CompVis/stable-diffusion-v1-4"
+    ).to("cuda")
+
+    breakpoint()
+
+    ml_models["music_captioning"] = AudioCaptioningModel(
+        n_mels=128,
+        vocab_size=len(ml_models["music_captioning_vocab"]),
+        d_model=512,
+        nhead=8,
+        num_encoder_layers=6,
+        num_decoder_layers=6,
+        dim_feedforward=2048,
+    ).to("cuda")
+
+    ml_models["music_captioning"].load_state_dict(torch.load("./best_model.pt"))
 
     yield
 
@@ -99,8 +150,16 @@ def generate_image(
     duration = end - start
 
     audio, sr = librosa.load(upload_file.file, offset=start, duration=duration)
+    torch.tensor(audio)
 
-    audio_text = speech_to_text(audio, sr)
+    lyrics = speech_to_text(audio, sr)
+    captions = infer(
+        torch.tensor(audio),
+        sr,
+        model=ml_models["music_captioning"],
+        vocab=ml_models["music_captioning_vocab"],
+        device="cuda",
+    )
 
     # image = generate_image(audio_text, audio)
     # path = save_image(image)
@@ -109,6 +168,24 @@ def generate_image(
     # generated_image_create = schemas.GalleryImageCreate(path=path, title=title, creation_date=creation_date)
     # crud.create_generated_image(db, generated_image_create)
     # return path
+
+    image_description = createResponse(
+        [
+            {
+                "role": "system",
+                "content": "You are an expert in generating emotionally resonant and concise image descriptions.",
+            },
+            {"role": "user", "content": promptData(captions, lyrics)},
+        ],
+        ml_models["llm"],
+        ml_models["llm_tokenizer"],
+    )
+
+    # Generate an image from a prompt
+    image = ml_models["stable_diffusion"](image_description.split("\n")[-1]).images[0]
+
+    # Save the image
+    image.save("generated_image.png")
 
     return speech_to_text(audio, sr)
 
