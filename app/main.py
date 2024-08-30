@@ -24,7 +24,7 @@ from datetime import datetime
 import dill
 
 
-from . import crud, models, schemas
+from app import crud, models, schemas
 from .database import SessionLocal, engine
 from .utils import createResponse, promptData
 from .model import AudioCaptioningModel, Vocabulary, infer
@@ -109,7 +109,7 @@ async def lifespan(app: FastAPI):
 
     ml_models["music_captioning"] = AudioCaptioningModel(
         n_mels=128,
-        vocab_size=len(ml_models["music_captioning_vocab"]),
+        vocab_size=len(ml_models["music_captioning_vocab"].itos),
         d_model=512,
         nhead=8,
         num_encoder_layers=6,
