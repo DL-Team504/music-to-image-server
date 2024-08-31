@@ -24,7 +24,7 @@ import uuid
 import dill
 
 
-from . import crud, models, schemas
+from app import crud, models, schemas
 from .database import SessionLocal, engine
 from .utils import createResponse, promptData
 from .model import AudioCaptioningModel, Vocabulary, infer
