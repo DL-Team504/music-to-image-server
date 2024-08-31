@@ -166,7 +166,7 @@ def generate_image(
                 "role": "system",
                 "content": "You are an expert in generating emotionally resonant and concise image descriptions.",
             },
-            {"role": "user", "content": promptData(captions, lyrics)},
+            {"role": "user", "content": promptData(captions, lyrics, image_style)},
         ],
         ml_models["llm"],
         ml_models["llm_tokenizer"],
