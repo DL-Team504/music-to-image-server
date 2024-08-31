@@ -172,9 +172,9 @@ class AudioCaptioningModel(nn.Module):
 
 
 def infer(
-    # audio_path,
-    waveform,
-    sample_rate,
+    audio_path,
+    # waveform,
+    # sample_rate,
     model,
     vocab,
     fixed_length=160000,
@@ -184,7 +184,7 @@ def infer(
     device="cuda",
 ):
     # Load and preprocess the audio
-    # waveform, sample_rate = torchaudio.load(audio_path)
+    waveform, sample_rate = torchaudio.load(audio_path)
     waveform = waveform.mean(dim=0, keepdim=True)  # Convert to mono
     waveform = torchaudio.transforms.Resample(
         orig_freq=sample_rate, new_freq=target_sample_rate

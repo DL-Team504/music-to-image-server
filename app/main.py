@@ -14,13 +14,13 @@ from transformers import (
 )
 from diffusers import StableDiffusionPipeline
 
-# from transformers import , AutoTokenizer
 import librosa
 import numpy as np
 from sqlalchemy.orm import Session
 from datetime import datetime
+import soundfile as sf
+import uuid
 
-# import pickle
 import dill
 
 
@@ -28,8 +28,6 @@ from . import crud, models, schemas
 from .database import SessionLocal, engine
 from .utils import createResponse, promptData
 from .model import AudioCaptioningModel, Vocabulary, infer
-
-# from .__main__ import Vocabulary
 
 
 models.Base.metadata.create_all(bind=engine)
@@ -105,11 +103,9 @@ async def lifespan(app: FastAPI):
         "CompVis/stable-diffusion-v1-4"
     ).to("cuda")
 
-    breakpoint()
-
     ml_models["music_captioning"] = AudioCaptioningModel(
         n_mels=128,
-        vocab_size=len(ml_models["music_captioning_vocab"]),
+        vocab_size=len(ml_models["music_captioning_vocab"].itos),
         d_model=512,
         nhead=8,
         num_encoder_layers=6,
@@ -117,7 +113,7 @@ async def lifespan(app: FastAPI):
         dim_feedforward=2048,
     ).to("cuda")
 
-    ml_models["music_captioning"].load_state_dict(torch.load("./best_model.pt"))
+    ml_models["music_captioning"].load_state_dict(torch.load("app\\best_model.pt"))
 
     yield
 
@@ -131,10 +127,11 @@ app.mount("/images", StaticFiles(directory="images"), name="images")
 
 @app.post("/generate-image")
 def generate_image(
-    start: int = Form(...),
-    end: int = Form(...),
+    start: float = Form(...),
+    end: float = Form(...),
     image_style: str | None = Form(None),
     upload_file: UploadFile = File(...),
+    db: Session = Depends(get_db)
 ) -> str:
     # splice audio according to focus_area
     # pass to audio to image function
@@ -150,24 +147,18 @@ def generate_image(
     duration = end - start
 
     audio, sr = librosa.load(upload_file.file, offset=start, duration=duration)
-    torch.tensor(audio)
+
+    file_id = uuid.uuid4()
+
+    sf.write(f'{file_id}.wav', audio, sr, subtype='PCM_24')
 
     lyrics = speech_to_text(audio, sr)
     captions = infer(
-        torch.tensor(audio),
-        sr,
+        f'{file_id}.wav',
         model=ml_models["music_captioning"],
         vocab=ml_models["music_captioning_vocab"],
         device="cuda",
     )
-
-    # image = generate_image(audio_text, audio)
-    # path = save_image(image)
-    # title = upload_file.filename
-    # creation_date = datetime.today().strftime('%B %d, %Y')
-    # generated_image_create = schemas.GalleryImageCreate(path=path, title=title, creation_date=creation_date)
-    # crud.create_generated_image(db, generated_image_create)
-    # return path
 
     image_description = createResponse(
         [
@@ -183,9 +174,12 @@ def generate_image(
 
     # Generate an image from a prompt
     image = ml_models["stable_diffusion"](image_description.split("\n")[-1]).images[0]
+    title = upload_file.filename
+    creation_date = datetime.today().strftime('%B %d, %Y')
+    generated_image_create = schemas.GalleryImageCreate(path=f"images/{file_id}.png", title=title, creation_date=creation_date)
+    crud.create_generated_image(db, generated_image_create)
 
-    # Save the image
-    image.save("generated_image.png")
+    image.save(f"images/{file_id}.png")
 
     return speech_to_text(audio, sr)
 
