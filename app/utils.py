@@ -19,7 +19,9 @@ def createResponse(messages, llm, tokenizer, temperature=0.0):
     return response
 
 
-def promptData(song_descriptions: str | list[str], lyrics: str, image_style: str) -> str:
+def promptData(
+    song_descriptions: str | list[str], lyrics: str, image_style: str | None
+) -> str:
     request_text = (
         "I will provide a song description and lyrics in English and Hebrew. "
         + "Your task is to generate a 77-token maximum image description in English that captures the core emotions and messages of the song. "
@@ -28,7 +30,7 @@ def promptData(song_descriptions: str | list[str], lyrics: str, image_style: str
 
     prompt = request_text
 
-    if len(image_style) > 0:
+    if image_style is not None and len(image_style) > 0:
         prompt += "Requirements: " + image_style
 
     if len(song_descriptions) > 0:

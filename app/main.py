@@ -1,8 +1,8 @@
-from diffusers.pipelines import stable_diffusion
 from fastapi import FastAPI, File, Form, UploadFile, Depends
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from typing import TypedDict, Any
+from typing import TypedDict
 import torch
 from transformers import (
     WhisperProcessor,
@@ -12,7 +12,7 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizer,
 )
-from diffusers import StableDiffusionPipeline
+from diffusers import FluxPipeline, StableDiffusionPipeline
 
 import librosa
 import numpy as np
@@ -20,6 +20,10 @@ from sqlalchemy.orm import Session
 from datetime import datetime
 import soundfile as sf
 import uuid
+import os
+from pathlib import Path
+from huggingface_hub import login
+
 
 import dill
 
@@ -70,7 +74,6 @@ class MlModels(TypedDict):
     stable_diffusion: StableDiffusionPipeline
     music_captioning: AudioCaptioningModel
     music_captioning_vocab: Vocabulary
-    # music_captioning_vocab: Any
 
 
 ml_models: MlModels = {}
@@ -99,6 +102,15 @@ async def lifespan(app: FastAPI):
     ml_models["llm_tokenizer"] = AutoTokenizer.from_pretrained(
         "microsoft/Phi-3-mini-128k-instruct"
     )
+
+    # ml_models["stable_diffusion"] = StableDiffusionPipeline.from_pretrained(
+    # "CompVis/stable-diffusion-v1-4"
+
+    login(token="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")
+
+    # ml_models["stable_diffusion"] = FluxPipeline.from_pretrained(
+    #     "black-forest-labs/FLUX.1-dev", torch_dtype=torch.bfloat16
+    # ).to("cuda")
     ml_models["stable_diffusion"] = StableDiffusionPipeline.from_pretrained(
         "CompVis/stable-diffusion-v1-4"
     ).to("cuda")
@@ -113,7 +125,7 @@ async def lifespan(app: FastAPI):
         dim_feedforward=2048,
     ).to("cuda")
 
-    ml_models["music_captioning"].load_state_dict(torch.load("app\\best_model.pt"))
+    ml_models["music_captioning"].load_state_dict(torch.load(Path("app/best_model.pt")))
 
     yield
 
@@ -121,6 +133,14 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.mount("/images", StaticFiles(directory="images"), name="images")
 
@@ -133,20 +153,16 @@ def generate_image(
     upload_file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ) -> str:
-    # splice audio according to focus_area
-    # pass to audio to image function
-    # save the image received from the function
-    # make a db record of {image_url, title(audio file name), creation_date}
-    # return the url location of the image
-
     if start < 0:
         start = 0
 
-    end = min(start + 60, end)
+    end = min(start + 30, end)
 
     duration = end - start
 
     audio, sr = librosa.load(upload_file.file, offset=start, duration=duration)
+
+    print("after stt")
 
     file_id = uuid.uuid4()
 
@@ -158,6 +174,8 @@ def generate_image(
     chunks = [audio[i : i + chunk_samples] for i in range(0, len(audio), chunk_samples)]
     captions: list[str] = []
 
+    print("split to chunks")
+
     for i, chunk in enumerate(chunks):
         output_file = f"{file_id}_chunk_{i}.wav"
 
@@ -165,12 +183,16 @@ def generate_image(
 
         captions.append(
             infer(
-                f"{file_id}.wav",
+                f"{file_id}_chunk_{i}.wav",
                 model=ml_models["music_captioning"],
                 vocab=ml_models["music_captioning_vocab"],
                 device="cuda",
             )
         )
+
+        os.remove(output_file)
+
+    print("after captions")
 
     image_description = createResponse(
         [
@@ -194,7 +216,7 @@ def generate_image(
 
     image.save(f"images/{file_id}.png")
 
-    return speech_to_text(audio, sr)
+    return f"images/{file_id}.png"
 
 
 @app.get("/gallery/images")
