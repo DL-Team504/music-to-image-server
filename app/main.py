@@ -131,7 +131,7 @@ def generate_image(
     end: float = Form(...),
     image_style: str | None = Form(None),
     upload_file: UploadFile = File(...),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ) -> str:
     # splice audio according to focus_area
     # pass to audio to image function
@@ -150,15 +150,27 @@ def generate_image(
 
     file_id = uuid.uuid4()
 
-    sf.write(f'{file_id}.wav', audio, sr, subtype='PCM_24')
-
     lyrics = speech_to_text(audio, sr)
-    captions = infer(
-        f'{file_id}.wav',
-        model=ml_models["music_captioning"],
-        vocab=ml_models["music_captioning_vocab"],
-        device="cuda",
-    )
+
+    chunk_duration = 10
+    chunk_samples = int(chunk_duration * sr)
+
+    chunks = [audio[i : i + chunk_samples] for i in range(0, len(audio), chunk_samples)]
+    captions: list[str] = []
+
+    for i, chunk in enumerate(chunks):
+        output_file = f"{file_id}_chunk_{i}.wav"
+
+        sf.write(output_file, chunk, sr, subtype="PCM_24")
+
+        captions.append(
+            infer(
+                f"{file_id}.wav",
+                model=ml_models["music_captioning"],
+                vocab=ml_models["music_captioning_vocab"],
+                device="cuda",
+            )
+        )
 
     image_description = createResponse(
         [
@@ -172,11 +184,12 @@ def generate_image(
         ml_models["llm_tokenizer"],
     )
 
-    # Generate an image from a prompt
     image = ml_models["stable_diffusion"](image_description.split("\n")[-1]).images[0]
     title = upload_file.filename
-    creation_date = datetime.today().strftime('%B %d, %Y')
-    generated_image_create = schemas.GalleryImageCreate(path=f"images/{file_id}.png", title=title, creation_date=creation_date)
+    creation_date = datetime.today().strftime("%B %d, %Y")
+    generated_image_create = schemas.GalleryImageCreate(
+        path=f"images/{file_id}.png", title=title, creation_date=creation_date
+    )
     crud.create_generated_image(db, generated_image_create)
 
     image.save(f"images/{file_id}.png")
