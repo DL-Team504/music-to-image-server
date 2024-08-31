@@ -142,7 +142,7 @@ def generate_image(
     if start < 0:
         start = 0
 
-    end = min(start + 30, end)
+    end = min(start + 60, end)
 
     duration = end - start
 
