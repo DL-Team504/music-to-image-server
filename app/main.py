@@ -200,7 +200,7 @@ def generate_image(
     sr: int,
     offset: float,
     duration: float,
-    image_style: str,
+    image_style: str | None,
     file_name: str,
     db: Session,
 ) -> str:
