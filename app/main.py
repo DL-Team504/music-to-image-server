@@ -23,6 +23,7 @@ import uuid
 import os
 from pathlib import Path
 from huggingface_hub import login
+from pytubefix import YouTube
 
 
 import dill
@@ -145,8 +146,8 @@ app.add_middleware(
 app.mount("/images", StaticFiles(directory="images"), name="images")
 
 
-@app.post("/generate-image")
-def generate_image(
+@app.post("/generate-image/file")
+def generate_image_from_file(
     start: float = Form(...),
     end: float = Form(...),
     image_style: str | None = Form(None),
@@ -162,8 +163,47 @@ def generate_image(
 
     audio, sr = librosa.load(upload_file.file, offset=start, duration=duration)
 
-    print("after stt")
+    return generate_image(
+        audio, sr, start, duration, image_style, upload_file.filename, db
+    )
 
+
+@app.post("/generate-image/yt")
+def generate_image_from_link(
+    start: float,
+    end: float,
+    youtube_url: str,
+    image_style: str | None = None,
+    db: Session = Depends(get_db),
+) -> str:
+    if start < 0:
+        start = 0
+
+    end = min(start + 30, end)
+    duration = end - start
+
+    yt_file_id = uuid.uuid4()
+    yt = YouTube(
+        "https://www.youtube.com/watch?v=tjD1n-i4aMc&list=PLUvf4JqqoCcQntRhIFyeE24AG3q_0X2t_&index=16"
+    )
+    yt.streams.get_audio_only().download(filename=f"{yt_file_id}_yt_stream", mp3=True)
+
+    audio, sr = librosa.load(
+        f"{yt_file_id}_yt_stream.mp3", offset=start, duration=duration
+    )
+
+    return generate_image(audio, sr, start, duration, image_style, yt.title, db)
+
+
+def generate_image(
+    audio: np.ndarray,
+    sr: int,
+    offset: float,
+    duration: float,
+    image_style: str,
+    file_name: str,
+    db: Session,
+) -> str:
     file_id = uuid.uuid4()
 
     lyrics = speech_to_text(audio, sr)
@@ -173,8 +213,6 @@ def generate_image(
 
     chunks = [audio[i : i + chunk_samples] for i in range(0, len(audio), chunk_samples)]
     captions: list[str] = []
-
-    print("split to chunks")
 
     for i, chunk in enumerate(chunks):
         output_file = f"{file_id}_chunk_{i}.wav"
@@ -192,8 +230,6 @@ def generate_image(
 
         os.remove(output_file)
 
-    print("after captions")
-
     image_description = createResponse(
         [
             {
@@ -207,7 +243,7 @@ def generate_image(
     )
 
     image = ml_models["stable_diffusion"](image_description.split("\n")[-1]).images[0]
-    title = upload_file.filename
+    title = file_name
     creation_date = datetime.today().strftime("%B %d, %Y")
     generated_image_create = schemas.GalleryImageCreate(
         path=f"images/{file_id}.png", title=title, creation_date=creation_date

@@ -9,6 +9,7 @@ sentencepiece
 nltk
 accelerate
 protobuf
+pytubefix
 
 # accelerate==0.33.0
 # annotated-types==0.7.0
